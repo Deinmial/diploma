@@ -69,7 +69,7 @@ def check_image_id_exists(image_id: str) -> bool:
 def save_to_db(encodings: List[np.ndarray], image_path: str, image_id: str, default_name: str) -> bool:
     if check_image_id_exists(image_id):
         logger.info(f"Изображение с image_id {image_id} уже обработано")
-        return True  # Пропускаем, но возвращаем True, чтобы отметить как успешно обработанное
+        return True
 
     try:
         conn = get_db_connection()
@@ -124,6 +124,51 @@ def save_processed_file(filename: str, tracking_file: str = "processed_files.jso
     except Exception as e:
         logger.error(f"Ошибка записи в {tracking_file}: {e}")
 
+# Функция для удаления записей из БД, если файл отсутствует
+def delete_missing_images(directory: str = "uploads", tracking_file: str = "processed_files.json") -> None:
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Получить все image_id из БД
+        cursor.execute("SELECT DISTINCT image_id FROM faces")
+        db_image_ids = {row[0] for row in cursor.fetchall()}
+
+        # Получить все файлы в директории
+        existing_files = {os.path.splitext(f)[0] for f in os.listdir(directory)
+                         if f.lower().endswith(('.jpg', '.jpeg', '.png'))}
+
+        # Найти image_id, которых нет в директории
+        missing_ids = db_image_ids - existing_files
+
+        # Удалить записи для отсутствующих файлов
+        for image_id in missing_ids:
+            cursor.execute("DELETE FROM faces WHERE image_id = %s", (image_id,))
+            logger.info(f"Удалены записи для image_id: {image_id}")
+
+        conn.commit()
+        conn.close()
+
+        # Обновить processed_files.json, удалив отсутствующие файлы
+        processed_files = load_processed_files(tracking_file)
+        processed_files = {f for f in processed_files if os.path.splitext(f)[0] in existing_files}
+        try:
+            with open(tracking_file, 'w') as f:
+                json.dump(list(processed_files), f)
+            logger.info("Файл processed_files.json обновлён")
+        except Exception as e:
+            logger.error(f"Ошибка обновления {tracking_file}: {e}")
+    except psycopg2.Error as e:
+        logger.error(f"Ошибка при удалении записей из БД: {e}")
+        if 'conn' in locals():
+            conn.rollback()
+            conn.close()
+    except Exception as e:
+        logger.error(f"Общая ошибка при удалении: {e}")
+        if 'conn' in locals():
+            conn.rollback()
+            conn.close()
+
 # Функция для обработки изображений в директории
 def process_directory(
     directory: str = "uploads",
@@ -132,6 +177,9 @@ def process_directory(
     if not os.path.isdir(directory):
         logger.error(f"Директория не найдена: {directory}")
         return
+
+    # Удаление записей для отсутствующих файлов
+    delete_missing_images(directory, tracking_file)
 
     # Загрузка списка уже обработанных файлов
     processed_files = load_processed_files(tracking_file)
