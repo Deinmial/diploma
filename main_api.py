@@ -6,6 +6,9 @@ import os
 import logging
 from typing import List
 from PIL import Image
+from datetime import datetime
+import threading
+import time
 
 # Настройка логирования
 logging.basicConfig(
@@ -20,6 +23,16 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# Функция для отложенного удаления файлов
+def delayed_delete(file_paths, delay_seconds):
+    try:
+        time.sleep(delay_seconds)
+        for file_path in file_paths:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                logger.info(f"Файл {file_path} удалён после задержки")
+    except Exception as e:
+        logger.error(f"Ошибка при отложенном удалении файлов: {e}")
 
 # Подключение к PostgreSQL
 def get_db_connection():
@@ -35,7 +48,6 @@ def get_db_connection():
     except psycopg2.Error as e:
         logger.error(f"Ошибка подключения к БД: {e}")
         raise ValueError(f"Не удалось подключиться к базе данных: {str(e)}")
-
 
 # Функция для извлечения энкодингов и координат лиц
 def extract_face_encodings(image_path: str) -> tuple[List[np.ndarray], List[tuple]]:
@@ -58,10 +70,9 @@ def extract_face_encodings(image_path: str) -> tuple[List[np.ndarray], List[tupl
         logger.error(f"Ошибка при обработке изображения {image_path}: {e}")
         raise
 
-
 # Функция для сохранения обрезанных лиц
 def save_cropped_faces(image_path: str, locations: List[tuple], filename: str) -> List[str]:
-    faces_dir = "faces"
+    faces_dir = "/opt/lampp/htdocs/faces"
     os.makedirs(faces_dir, exist_ok=True)
     face_paths = []
 
@@ -69,7 +80,7 @@ def save_cropped_faces(image_path: str, locations: List[tuple], filename: str) -
         image = Image.open(image_path)
         for i, (top, right, bottom, left) in enumerate(locations):
             face_image = image.crop((left, top, right, bottom))
-            face_path = os.path.join(faces_dir, f"{os.path.splitext(filename)[0]}_face_{i + 1}.png")
+            face_path = os.path.join(faces_dir, f"{os.path.splitext(filename)[0]}_face_{i+1}.png")
             face_image.save(face_path)
             face_paths.append(face_path)
             logger.info(f"Сохранено обрезанное лицо: {face_path}")
@@ -77,7 +88,6 @@ def save_cropped_faces(image_path: str, locations: List[tuple], filename: str) -
     except Exception as e:
         logger.error(f"Ошибка при сохранении обрезанных лиц: {e}")
         return []
-
 
 # Маршрут для обработки изображения
 @app.route('/process_image', methods=['POST'])
@@ -89,10 +99,12 @@ def process_image():
     file = request.files['image']
     recognition_dir = "recognition"
     os.makedirs(recognition_dir, exist_ok=True)
-    image_path = os.path.join(recognition_dir, file.filename)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    image_path = os.path.join(recognition_dir, f"{timestamp}_{file.filename}")
 
     try:
         file.save(image_path)
+        logger.info(f"Сохранено изображение: {image_path}")
     except Exception as e:
         logger.error(f"Ошибка сохранения файла {file.filename}: {e}")
         return jsonify({'error': f"Не удалось сохранить изображение: {str(e)}"}), 500
@@ -102,7 +114,7 @@ def process_image():
         encodings, locations = extract_face_encodings(image_path)
 
         # Сохранение обрезанных лиц
-        face_paths = save_cropped_faces(image_path, locations, file.filename)
+        face_paths = save_cropped_faces(image_path, locations, f"{timestamp}_{file.filename}")
 
         # Подключение к БД
         conn = get_db_connection()
@@ -121,59 +133,48 @@ def process_image():
                 'face_image_path': face_paths[i] if i < len(face_paths) else None
             }
             for row in rows:
-                db_encoding = np.array(row[2])  # FLOAT[] преобразуется в numpy массив
+                db_encoding = np.array(row[2])
                 match = face_recognition.compare_faces([db_encoding], encoding, tolerance=0.5)[0]
                 if match:
-                    # Формируем путь к оригинальному изображению (опционально)
                     image_id = row[3]
+                    logger.info(f"Файлы в uploads/ перед обработкой: {os.listdir('uploads')}")
                     possible_extensions = ['.png', '.jpg', '.jpeg']
-                    image_path = None
+                    matched_image_path = None
                     for ext in possible_extensions:
                         candidate_path = os.path.join('uploads', f"{image_id}{ext}")
                         if os.path.exists(candidate_path):
-                            image_path = candidate_path
+                            matched_image_path = candidate_path
                             break
-                    if not image_path:
-                        logger.warning(f"Оригинальное изображение для image_id {image_id} не найдено в Uploads/")
+                    if not matched_image_path:
+                        logger.warning(f"Оригинальное изображение для image_id {image_id} не найдено в uploads/")
 
                     face_results['matches'].append({
                         'id': row[0],
                         'name': row[1],
                         'image_id': image_id,
-                        'image_path': image_path if image_path else None
+                        'image_path': matched_image_path
                     })
             results.append(face_results)
 
         conn.close()
 
-        # Удаление файлов после обработки
-        try:
-            os.remove(image_path)
-            logger.info(f"Файл {image_path} удалён после распознавания")
-            for face_path in face_paths:
-                if os.path.exists(face_path):
-                    os.remove(face_path)
-                    logger.info(f"Файл {face_path} удалён после распознавания")
-        except Exception as e:
-            logger.error(f"Ошибка удаления файлов: {e}")
+        # Запуск отложенного удаления (5 минут = 300 секунд)
+        all_paths = [image_path] + face_paths
+        threading.Thread(target=delayed_delete, args=(all_paths, 300)).start()
 
         return jsonify({'results': results}), 200
 
     except ValueError as e:
-        os.remove(image_path) if os.path.exists(image_path) else None
-        logger.info(f"Файл {image_path} удалён из-за ошибки: {e}")
+        logger.info(f"Файл {image_path} не удалён из-за ошибки: {e}")
         return jsonify({'error': str(e)}), 400
     except psycopg2.Error as e:
-        os.remove(image_path) if os.path.exists(image_path) else None
         logger.error(f"Ошибка базы данных: {e}")
-        logger.info(f"Файл {image_path} удалён из-за ошибки БД")
+        logger.info(f"Файл {image_path} не удалён из-за ошибки БД")
         return jsonify({'error': f"Ошибка базы данных: {str(e)}"}), 500
     except Exception as e:
-        os.remove(image_path) if os.path.exists(image_path) else None
         logger.error(f"Неизвестная ошибка: {e}")
-        logger.info(f"Файл {image_path} удалён из-за неизвестной ошибки")
+        logger.info(f"Файл {image_path} не удалён из-за неизвестной ошибки")
         return jsonify({'error': f"Внутренняя ошибка сервера: {str(e)}"}), 500
-
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
