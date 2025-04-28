@@ -38,7 +38,7 @@ def delayed_delete(file_paths, delay_seconds):
 def get_db_connection():
     try:
         conn = psycopg2.connect(
-            dbname="encoding_photos",
+            dbname="attendance",
             user="dmitry",
             password="dmitry",
             host="localhost",

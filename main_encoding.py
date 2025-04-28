@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 def get_db_connection():
     try:
         conn = psycopg2.connect(
-            dbname="encoding_photos",
+            dbname="attendance",
             user="dmitry",
             password="dmitry",
             host="localhost",
