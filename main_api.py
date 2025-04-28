@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import face_recognition
 import psycopg2
 import numpy as np
@@ -9,6 +10,7 @@ from PIL import Image
 from datetime import datetime
 import threading
 import time
+from main_encoding import extract_face_encodings, save_face_encodings, process_single_image, has_student_photo, delete_student_photos
 
 # Настройка логирования
 logging.basicConfig(
@@ -22,15 +24,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "http://localhost"}})
 
 # Функция для отложенного удаления файлов
 def delayed_delete(file_paths, delay_seconds):
+    logger.info(f"Запуск отложенного удаления для файлов: {file_paths} с задержкой {delay_seconds} секунд")
     try:
         time.sleep(delay_seconds)
         for file_path in file_paths:
             if os.path.exists(file_path):
+                logger.info(f"Попытка удаления файла: {file_path}")
                 os.remove(file_path)
                 logger.info(f"Файл {file_path} удалён после задержки")
+            else:
+                logger.warning(f"Файл {file_path} не существует при попытке удаления")
     except Exception as e:
         logger.error(f"Ошибка при отложенном удалении файлов: {e}")
 
@@ -48,27 +55,6 @@ def get_db_connection():
     except psycopg2.Error as e:
         logger.error(f"Ошибка подключения к БД: {e}")
         raise ValueError(f"Не удалось подключиться к базе данных: {str(e)}")
-
-# Функция для извлечения энкодингов и координат лиц
-def extract_face_encodings(image_path: str) -> tuple[List[np.ndarray], List[tuple]]:
-    try:
-        if not os.path.exists(image_path):
-            logger.error(f"Изображение не найдено: {image_path}")
-            raise ValueError("Файл изображения не найден")
-
-        image = face_recognition.load_image_file(image_path)
-        encodings = face_recognition.face_encodings(image)
-        locations = face_recognition.face_locations(image)
-
-        if len(encodings) == 0:
-            logger.warning(f"Лица не найдены в изображении: {image_path}")
-            raise ValueError("Лица не найдены на изображении")
-
-        logger.info(f"Найдено {len(encodings)} лиц в изображении: {image_path}")
-        return encodings, locations
-    except Exception as e:
-        logger.error(f"Ошибка при обработке изображения {image_path}: {e}")
-        raise
 
 # Функция для сохранения обрезанных лиц
 def save_cropped_faces(image_path: str, locations: List[tuple], filename: str) -> List[str]:
@@ -89,12 +75,247 @@ def save_cropped_faces(image_path: str, locations: List[tuple], filename: str) -
         logger.error(f"Ошибка при сохранении обрезанных лиц: {e}")
         return []
 
-# Маршрут для обработки изображения
+# Маршрут для получения списка групп
+@app.route('/groups', methods=['GET'])
+def get_groups():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT group_id, group_name FROM groups")
+        groups = [{'group_id': row[0], 'group_name': row[1]} for row in cursor.fetchall()]
+        conn.close()
+        return jsonify({'groups': groups}), 200
+    except Exception as e:
+        logger.error(f"Ошибка получения групп: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# Маршрут для получения списка предметов
+@app.route('/subjects', methods=['GET'])
+def get_subjects():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT subject_id, subject_name FROM subjects")
+        subjects = [{'subject_id': row[0], 'subject_name': row[1]} for row in cursor.fetchall()]
+        conn.close()
+        return jsonify({'subjects': subjects}), 200
+    except Exception as e:
+        logger.error(f"Ошибка получения предметов: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# Маршрут для получения списка студентов
+@app.route('/students', methods=['GET'])
+def get_students():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT s.student_id, s.full_name, g.group_name, f.image_id
+            FROM students s
+            LEFT JOIN groups g ON s.group_id = g.group_id
+            LEFT JOIN faces f ON s.student_id = f.student_id
+        """)
+        students = [
+            {
+                'student_id': row[0],
+                'full_name': row[1],
+                'group_name': row[2] or 'Без группы',
+                'has_photo': bool(row[3]),
+                'image_id': row[3]
+            }
+            for row in cursor.fetchall()
+        ]
+        conn.close()
+        return jsonify({'students': students}), 200
+    except Exception as e:
+        logger.error(f"Ошибка получения студентов: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# Маршрут для добавления студента
+@app.route('/students', methods=['POST'])
+def add_student():
+    data = request.json
+    full_name = data.get('full_name')
+    group_id = data.get('group_id')
+
+    if not full_name:
+        return jsonify({'error': 'Имя студента обязательно'}), 400
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO students (full_name, group_id) VALUES (%s, %s) RETURNING student_id",
+            (full_name, group_id or None)
+        )
+        student_id = cursor.fetchone()[0]
+        conn.commit()
+        conn.close()
+        return jsonify({'student_id': student_id, 'status': 'success'}), 201
+    except psycopg2.Error as e:
+        logger.error(f"Ошибка добавления студента: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# Маршрут для удаления студента
+@app.route('/students/<int:student_id>', methods=['DELETE'])
+def delete_student(student_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Удаление связанных записей в attendance
+        cursor.execute("DELETE FROM attendance WHERE student_id = %s", (student_id,))
+        # Удаление связанных записей в faces
+        delete_student_photos(student_id)
+        # Удаление студента
+        cursor.execute("DELETE FROM students WHERE student_id = %s", (student_id,))
+
+        conn.commit()
+        conn.close()
+        return jsonify({'status': 'success'}), 200
+    except psycopg2.Error as e:
+        logger.error(f"Ошибка удаления студента student_id {student_id}: {e}")
+        if 'conn' in locals():
+            conn.rollback()
+            conn.close()
+        return jsonify({'error': str(e)}), 500
+
+# Маршрут для загрузки фото студента
+@app.route('/upload_student_photo', methods=['POST'])
+def upload_student_photo():
+    if 'image' not in request.files or 'student_id' not in request.form:
+        logger.error("Изображение или student_id не предоставлены")
+        return jsonify({'error': 'Требуется изображение и student_id'}), 400
+
+    file = request.files['image']
+    student_id = request.form['student_id']
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    image_id = f"{timestamp}_{os.path.splitext(file.filename)[0]}"
+    uploads_dir = "/home/dmitry/PycharmProjects/diploma/uploads"
+    os.makedirs(uploads_dir, exist_ok=True)
+    image_path = os.path.join(uploads_dir, f"{image_id}.png")
+
+    try:
+        file.save(image_path)
+        logger.info(f"Сохранено изображение: {image_path}")
+
+        # Проверка количества лиц
+        encodings = extract_face_encodings(image_path)
+        if len(encodings) == 0:
+            os.remove(image_path)  # Удаляем файл, если лиц нет
+            logger.warning(f"Лицо не найдено в изображении: {image_path}")
+            return jsonify({'error': 'Лицо не найдено на изображении'}), 400
+        if len(encodings) > 1:
+            os.remove(image_path)  # Удаляем файл, если лиц больше одного
+            logger.warning(f"Найдено более одного лица в изображении: {image_path}")
+            return jsonify({'error': 'На изображении должно быть ровно одно лицо'}), 400
+
+        # Обработка изображения
+        success = process_single_image(image_path, int(student_id), image_id)
+        if success:
+            return jsonify({'status': 'success', 'image_id': image_id}), 200
+        else:
+            os.remove(image_path)  # Удаляем файл, если обработка не удалась
+            return jsonify({'error': 'Не удалось обработать изображение'}), 400
+    except Exception as e:
+        logger.error(f"Ошибка обработки изображения: {e}")
+        if os.path.exists(image_path):
+            os.remove(image_path)  # Удаляем файл при любой ошибке
+        return jsonify({'error': str(e)}), 500
+
+# Маршрут для удаления фото студента
+@app.route('/delete_student_photo/<int:student_id>', methods=['DELETE'])
+def delete_student_photo(student_id):
+    try:
+        success = delete_student_photos(student_id)
+        if success:
+            return jsonify({'status': 'success'}), 200
+        else:
+            return jsonify({'error': 'Не удалось удалить фото'}), 400
+    except Exception as e:
+        logger.error(f"Ошибка удаления фото для student_id {student_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# Маршрут для получения записей посещаемости
+@app.route('/attendance', methods=['GET'])
+def get_attendance():
+    group_id = request.args.get('group_id')
+    subject_id = request.args.get('subject_id')
+    date = request.args.get('date')
+
+    query = """
+        SELECT a.attendance_id, s.full_name, g.group_name, a.attendance_date, sub.subject_name, a.status
+        FROM attendance a
+        JOIN students s ON a.student_id = s.student_id
+        JOIN groups g ON s.group_id = g.group_id
+        JOIN subjects sub ON a.subject_id = sub.subject_id
+        WHERE 1=1
+    """
+    params = []
+
+    if group_id:
+        query += " AND g.group_id = %s"
+        params.append(group_id)
+    if subject_id:
+        query += " AND sub.subject_id = %s"
+        params.append(subject_id)
+    if date:
+        query += " AND a.attendance_date = %s"
+        params.append(date)
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        attendance = [
+            {
+                'attendance_id': row[0],
+                'full_name': row[1],
+                'group_name': row[2],
+                'date': row[3].strftime('%Y-%m-%d'),
+                'subject_name': row[4],
+                'status': row[5]
+            }
+            for row in cursor.fetchall()
+        ]
+        conn.close()
+        return jsonify({'attendance': attendance}), 200
+    except Exception as e:
+        logger.error(f"Ошибка получения посещаемости: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# Маршрут для обновления статуса посещаемости
+@app.route('/attendance/<int:attendance_id>', methods=['PUT'])
+def update_attendance(attendance_id):
+    data = request.json
+    status = data.get('status')
+
+    if status not in ['present', 'absent']:
+        return jsonify({'error': 'Недопустимый статус'}), 400
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE attendance SET status = %s WHERE attendance_id = %s",
+            (status, attendance_id)
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({'status': 'success'}), 200
+    except Exception as e:
+        logger.error(f"Ошибка обновления посещаемости: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# Маршрут для обработки изображения посещаемости
 @app.route('/process_image', methods=['POST'])
 def process_image():
     if 'image' not in request.files:
         logger.error("Изображение не предоставлено в запросе")
         return jsonify({'error': 'Изображение не предоставлено'}), 400
+
+    subject_id = request.form.get('subject_id')
+    attendance_date = request.form.get('date', datetime.now().strftime('%Y-%m-%d'))
 
     file = request.files['image']
     recognition_dir = "recognition"
@@ -111,7 +332,11 @@ def process_image():
 
     try:
         # Извлечение энкодингов и координат лиц
-        encodings, locations = extract_face_encodings(image_path)
+        encodings = extract_face_encodings(image_path)
+        locations = face_recognition.face_locations(face_recognition.load_image_file(image_path))
+
+        if not encodings:
+            return jsonify({'error': 'Лица не найдены на изображении'}), 400
 
         # Сохранение обрезанных лиц
         face_paths = save_cropped_faces(image_path, locations, f"{timestamp}_{file.filename}")
@@ -121,7 +346,7 @@ def process_image():
         cursor = conn.cursor()
 
         # Извлечение энкодингов из БД
-        cursor.execute("SELECT id, name, face_encoding, image_id FROM faces")
+        cursor.execute("SELECT f.face_id, f.face_encoding, s.student_id, s.full_name FROM faces f JOIN students s ON f.student_id = s.student_id")
         rows = cursor.fetchall()
 
         results = []
@@ -133,34 +358,33 @@ def process_image():
                 'face_image_path': face_paths[i] if i < len(face_paths) else None
             }
             for row in rows:
-                db_encoding = np.array(row[2])
+                db_encoding = np.array(row[1])
                 match = face_recognition.compare_faces([db_encoding], encoding, tolerance=0.5)[0]
                 if match:
-                    image_id = row[3]
-                    logger.info(f"Файлы в uploads/ перед обработкой: {os.listdir('uploads')}")
-                    possible_extensions = ['.png', '.jpg', '.jpeg']
-                    matched_image_path = None
-                    for ext in possible_extensions:
-                        candidate_path = os.path.join('uploads', f"{image_id}{ext}")
-                        if os.path.exists(candidate_path):
-                            matched_image_path = candidate_path
-                            break
-                    if not matched_image_path:
-                        logger.warning(f"Оригинальное изображение для image_id {image_id} не найдено в uploads/")
-
+                    student_id = row[2]
+                    full_name = row[3]
                     face_results['matches'].append({
-                        'id': row[0],
-                        'name': row[1],
-                        'image_id': image_id,
-                        'image_path': matched_image_path
+                        'student_id': student_id,
+                        'full_name': full_name
                     })
+                    # Запись в таблицу посещаемости
+                    cursor.execute(
+                        """
+                        INSERT INTO attendance (student_id, subject_id, attendance_date, status)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        (student_id, subject_id, attendance_date, 'present')
+                    )
+            conn.commit()
             results.append(face_results)
 
         conn.close()
 
-        # Запуск отложенного удаления (5 минут = 300 секунд)
+        # Запуск отложенного удаления (60 секунд)
         all_paths = [image_path] + face_paths
-        threading.Thread(target=delayed_delete, args=(all_paths, 300)).start()
+        logger.info(f"Запуск отложенного удаления для путей: {all_paths}")
+        threading.Thread(target=delayed_delete, args=(all_paths, 60)).start()
 
         return jsonify({'results': results}), 200
 
