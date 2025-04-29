@@ -12,6 +12,7 @@ from datetime import datetime
 import threading
 import time
 from main_encoding import extract_face_encodings, save_face_encodings, process_single_image, has_student_photo, delete_student_photos
+import uuid
 
 # Настройка логирования с ротацией
 log_file = "face_encoding.log"
@@ -29,7 +30,7 @@ logger.addHandler(console_handler)
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "http://localhost"}})
 
-# Инициализация базы данных: создание таблиц, если они не существуют
+# Инициализация базы данных
 def init_db():
     conn = None
     try:
@@ -77,9 +78,11 @@ def init_db():
                 attendance_id SERIAL PRIMARY KEY,
                 student_id INTEGER REFERENCES students(student_id),
                 subject_id INTEGER REFERENCES subjects(subject_id),
+                group_id INTEGER REFERENCES groups(group_id),
                 attendance_date DATE NOT NULL,
                 status TEXT NOT NULL CHECK (status IN ('present', 'absent')),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(student_id, subject_id, group_id, attendance_date)
             );
         """)
         logger.info("Таблица attendance проверена/создана")
@@ -134,7 +137,8 @@ def save_cropped_faces(image_path: str, locations: List[tuple], filename: str) -
         image = Image.open(image_path)
         for i, (top, right, bottom, left) in enumerate(locations):
             face_image = image.crop((left, top, right, bottom))
-            face_path = os.path.join(faces_dir, f"{os.path.splitext(filename)[0]}_face_{i+1}.png")
+            face_id = str(uuid.uuid4())
+            face_path = os.path.join(faces_dir, f"{face_id}.png")
             face_image.save(face_path)
             face_paths.append(face_path)
             logger.info(f"Сохранено обрезанное лицо: {face_path}")
@@ -318,38 +322,35 @@ def get_attendance():
     subject_id = request.args.get('subject_id')
     date = request.args.get('date')
 
-    query = """
-        SELECT a.attendance_id, s.full_name, g.group_name, a.attendance_date, sub.subject_name, a.status
-        FROM attendance a
-        JOIN students s ON a.student_id = s.student_id
-        JOIN groups g ON s.group_id = g.group_id
-        JOIN subjects sub ON a.subject_id = sub.subject_id
-        WHERE 1=1
-    """
-    params = []
-
-    if group_id:
-        query += " AND g.group_id = %s"
-        params.append(group_id)
-    if subject_id:
-        query += " AND sub.subject_id = %s"
-        params.append(subject_id)
-    if date:
-        query += " AND a.attendance_date = %s"
-        params.append(date)
+    if not all([group_id, subject_id, date]):
+        logger.error("Отсутствуют обязательные параметры: group_id, subject_id, date")
+        return jsonify({'error': 'Отсутствуют обязательные параметры'}), 400
 
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
+        query = """
+            SELECT a.attendance_id, s.student_id, s.full_name, g.group_name, a.attendance_date, 
+                   sub.subject_name, a.status
+            FROM students s
+            LEFT JOIN attendance a ON s.student_id = a.student_id 
+                AND a.subject_id = %s AND a.attendance_date = %s AND a.group_id = %s
+            LEFT JOIN groups g ON s.group_id = g.group_id
+            CROSS JOIN (SELECT subject_name FROM subjects WHERE subject_id = %s) sub
+            WHERE s.group_id = %s
+            ORDER BY s.full_name
+        """
+        params = [subject_id, date, group_id, subject_id, group_id]
         cursor.execute(query, params)
         attendance = [
             {
                 'attendance_id': row[0],
-                'full_name': row[1],
-                'group_name': row[2],
-                'date': row[3].strftime('%Y-%m-%d'),
-                'subject_name': row[4],
-                'status': row[5]
+                'student_id': row[1],
+                'full_name': row[2],
+                'group_name': row[3],
+                'date': row[4].strftime('%Y-%m-%d') if row[4] else date,
+                'subject_name': row[5],
+                'status': row[6] or 'absent'
             }
             for row in cursor.fetchall()
         ]
@@ -359,11 +360,19 @@ def get_attendance():
         logger.error(f"Ошибка получения посещаемости: {e}")
         return jsonify({'error': str(e)}), 500
 
-# Маршрут для обновления статуса посещаемости
-@app.route('/attendance/<int:attendance_id>', methods=['PUT'])
-def update_attendance(attendance_id):
+# Маршрут для создания или обновления статуса посещаемости
+@app.route('/attendance', methods=['POST'])
+def update_or_create_attendance():
     data = request.json
+    student_id = data.get('student_id')
+    subject_id = data.get('subject_id')
+    group_id = data.get('group_id')
+    attendance_date = data.get('attendance_date')
     status = data.get('status')
+
+    if not all([student_id, subject_id, group_id, attendance_date, status]):
+        logger.error("Отсутствуют обязательные параметры для update_or_create_attendance")
+        return jsonify({'error': 'Отсутствуют обязательные параметры'}), 400
 
     if status not in ['present', 'absent']:
         return jsonify({'error': 'Недопустимый статус'}), 400
@@ -371,27 +380,32 @@ def update_attendance(attendance_id):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE attendance SET status = %s WHERE attendance_id = %s",
-            (status, attendance_id)
-        )
+        cursor.execute("""
+            INSERT INTO attendance (student_id, subject_id, group_id, attendance_date, status)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (student_id, subject_id, group_id, attendance_date)
+            DO UPDATE SET status = EXCLUDED.status
+            RETURNING attendance_id
+        """, (student_id, subject_id, group_id, attendance_date, status))
+        attendance_id = cursor.fetchone()[0]
         conn.commit()
         conn.close()
-        return jsonify({'status': 'success'}), 200
+        logger.info(f"Обновлена/создана посещаемость: student_id={student_id}, date={attendance_date}, status={status}, attendance_id={attendance_id}")
+        return jsonify({'status': 'success', 'attendance_id': attendance_id}), 200
     except Exception as e:
-        logger.error(f"Ошибка обновления посещаемости: {e}")
+        logger.error(f"Ошибка обновления/создания посещаемости: {e}")
         return jsonify({'error': str(e)}), 500
 
 # Маршрут для обработки изображения посещаемости
 @app.route('/process_image', methods=['POST'])
 def process_image():
-    if 'image' not in request.files:
-        logger.error("Изображение не предоставлено в запросе")
-        return jsonify({'error': 'Изображение не предоставлено'}), 400
+    if 'image' not in request.files or 'subject_id' not in request.form or 'date' not in request.form or 'group_id' not in request.form:
+        logger.error("Отсутствуют обязательные параметры: image, subject_id, date, group_id")
+        return jsonify({'error': 'Отсутствуют обязательные параметры'}), 400
 
-    subject_id = request.form.get('subject_id')
-    attendance_date = request.form.get('date', datetime.now().strftime('%Y-%m-%d'))
-
+    subject_id = request.form['subject_id']
+    attendance_date = request.form['date']
+    group_id = request.form['group_id']
     file = request.files['image']
     recognition_dir = "recognition"
     os.makedirs(recognition_dir, exist_ok=True)
@@ -401,16 +415,12 @@ def process_image():
     try:
         file.save(image_path)
         logger.info(f"Сохранено изображение: {image_path}")
-    except Exception as e:
-        logger.error(f"Ошибка сохранения файла {file.filename}: {e}")
-        return jsonify({'error': f"Не удалось сохранить изображение: {str(e)}"}), 500
-
-    try:
-        # Извлечение энкодингов и координат лиц
         encodings = extract_face_encodings(image_path)
         locations = face_recognition.face_locations(face_recognition.load_image_file(image_path))
 
         if not encodings:
+            logger.warning(f"Лица не найдены в изображении: {image_path}")
+            os.remove(image_path)
             return jsonify({'error': 'Лица не найдены на изображении'}), 400
 
         # Сохранение обрезанных лиц
@@ -421,38 +431,39 @@ def process_image():
         cursor = conn.cursor()
 
         # Извлечение энкодингов из БД
-        cursor.execute("SELECT f.face_id, f.face_encoding, s.student_id, s.full_name FROM faces f JOIN students s ON f.student_id = s.student_id")
+        cursor.execute("""
+            SELECT f.face_id, f.face_encoding, s.student_id, s.full_name, s.group_id
+            FROM faces f
+            JOIN students s ON f.student_id = s.student_id
+        """)
         rows = cursor.fetchall()
 
         results = []
         # Сравнение каждого лица
         for i, encoding in enumerate(encodings):
-            face_results = {
-                'face_number': i + 1,
-                'matches': [],
-                'face_image_path': face_paths[i] if i < len(face_paths) else None
+            face_id = os.path.splitext(os.path.basename(face_paths[i]))[0] if i < len(face_paths) else str(uuid.uuid4())
+            face_result = {
+                'face_id': face_id,
+                'face_image_path': face_paths[i] if i < len(face_paths) else None,
+                'status': 'unknown',
+                'matches': []
             }
             for row in rows:
                 db_encoding = np.array(row[1])
                 match = face_recognition.compare_faces([db_encoding], encoding, tolerance=0.5)[0]
                 if match:
-                    student_id = row[2]
-                    full_name = row[3]
-                    face_results['matches'].append({
-                        'student_id': student_id,
-                        'full_name': full_name
+                    student_group_id = row[4]
+                    distance = float(face_recognition.face_distance([db_encoding], encoding)[0])
+                    face_result['matches'].append({
+                        'student_id': row[2],
+                        'full_name': row[3],
+                        'distance': distance
                     })
-                    # Запись в таблицу посещаемости
-                    cursor.execute(
-                        """
-                        INSERT INTO attendance (student_id, subject_id, attendance_date, status)
-                        VALUES (%s, %s, %s, %s)
-                        ON CONFLICT DO NOTHING
-                        """,
-                        (student_id, subject_id, attendance_date, 'present')
-                    )
-            conn.commit()
-            results.append(face_results)
+                    if str(student_group_id) == group_id:
+                        face_result['status'] = 'present'
+                    else:
+                        face_result['status'] = 'other_group'
+            results.append(face_result)
 
         conn.close()
 
@@ -462,23 +473,82 @@ def process_image():
         threading.Thread(target=delayed_delete, args=(all_paths, 60)).start()
 
         return jsonify({'results': results}), 200
-
-    except ValueError as e:
-        logger.info(f"Файл {image_path} не удалён из-за ошибки: {e}")
-        return jsonify({'error': str(e)}), 400
-    except psycopg2.Error as e:
-        logger.error(f"Ошибка базы данных: {e}")
-        logger.info(f"Файл {image_path} не удалён из-за ошибки БД")
-        return jsonify({'error': f"Ошибка базы данных: {str(e)}"}), 500
     except Exception as e:
-        logger.error(f"Неизвестная ошибка: {e}")
-        logger.info(f"Файл {image_path} не удалён из-за неизвестной ошибки")
-        return jsonify({'error': f"Внутренняя ошибка сервера: {str(e)}"}), 500
+        logger.error(f"Ошибка обработки изображения: {e}")
+        if os.path.exists(image_path):
+            os.remove(image_path)
+        return jsonify({'error': str(e)}), 500
+
+# Маршрут для отметки посещаемости одного студента
+@app.route('/mark_attendance', methods=['POST'])
+def mark_attendance():
+    data = request.get_json()
+    student_id = data.get('student_id')
+    subject_id = data.get('subject_id')
+    attendance_date = data.get('attendance_date')
+    group_id = data.get('group_id')
+    status = data.get('status', 'present')
+
+    if not all([student_id, subject_id, attendance_date, group_id]):
+        logger.error("Отсутствуют обязательные параметры для mark_attendance")
+        return jsonify({'error': 'Отсутствуют обязательные параметры'}), 400
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO attendance (student_id, subject_id, group_id, attendance_date, status)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (student_id, subject_id, group_id, attendance_date)
+            DO UPDATE SET status = EXCLUDED.status
+            RETURNING attendance_id
+        """, (student_id, subject_id, group_id, attendance_date, status))
+        attendance_id = cursor.fetchone()[0]
+        conn.commit()
+        conn.close()
+        logger.info(f"Отмечена посещаемость: student_id={student_id}, date={attendance_date}, status={status}")
+        return jsonify({'status': 'success', 'attendance_id': attendance_id}), 200
+    except Exception as e:
+        logger.error(f"Ошибка при отметке посещаемости: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# Маршрут для массовой отметки посещаемости
+@app.route('/bulk_mark_attendance', methods=['POST'])
+def bulk_mark_attendance():
+    data = request.get_json()
+    records = data.get('records', [])
+    if not records:
+        logger.error("Отсутствуют записи для массовой отметки")
+        return jsonify({'error': 'Отсутствуют записи'}), 400
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        for record in records:
+            cursor.execute("""
+                INSERT INTO attendance (student_id, subject_id, group_id, attendance_date, status)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (student_id, subject_id, group_id, attendance_date)
+                DO UPDATE SET status = EXCLUDED.status
+            """, (
+                record['student_id'],
+                record['subject_id'],
+                record['group_id'],
+                record['attendance_date'],
+                record['status']
+            ))
+        conn.commit()
+        conn.close()
+        logger.info(f"Массово отмечено {len(records)} записей посещаемости")
+        return jsonify({'status': 'success'}), 200
+    except Exception as e:
+        logger.error(f"Ошибка при массовой отметке посещаемости: {e}")
+        return jsonify({'error': str(e)}), 500
 
 # Маршрут для получения логов
 @app.route('/logs', methods=['GET'])
 def get_logs():
-    log_file = "face_encoding.log"
+    log_file = "/home/dmitry/PycharmProjects/diploma/face_encoding.log"
     try:
         logs = []
         # Чтение основного файла и резервных файлов (face_encoding.log.1, .2, ..., .5)
