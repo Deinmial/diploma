@@ -8,13 +8,13 @@ function showSection(section) {
         loadAttendance();
     } else if (section === 'students') {
         console.log('Showing students section');
+        loadStudentsFilters();
         loadStudents();
     }
-    // Сохраняем текущую вкладку в localStorage
     localStorage.setItem('activeSection', section);
 }
 
-// Загрузка групп и предметов для посещаемости
+// Загрузка фильтров для посещаемости
 function loadFilters() {
     fetch('http://localhost:5000/groups')
     .then(response => {
@@ -54,6 +54,27 @@ function loadFilters() {
         });
     })
     .catch(error => console.error('Error loading subjects:', error));
+}
+
+// Загрузка фильтров для студентов
+function loadStudentsFilters() {
+    fetch('http://localhost:5000/groups')
+    .then(response => {
+        if (!response.ok) throw new Error('Failed to load groups');
+        return response.json();
+    })
+    .then(data => {
+        console.log('Groups for student filters:', data);
+        const groupSelect = document.getElementById('student-group-filter');
+        groupSelect.innerHTML = '<option value="">Все группы</option>';
+        data.groups.forEach(group => {
+            const option = document.createElement('option');
+            option.value = group.group_id;
+            option.textContent = group.group_name;
+            groupSelect.appendChild(option);
+        });
+    })
+    .catch(error => console.error('Error loading groups for student filters:', error));
 }
 
 // Загрузка групп для модального окна добавления студента
@@ -133,7 +154,11 @@ function loadAttendance() {
 
 // Загрузка таблицы студентов
 function loadStudents() {
-    fetch('http://localhost:5000/students')
+    const groupId = document.getElementById('student-group-filter').value;
+    let url = 'http://localhost:5000/students';
+    if (groupId) url += `?group_id=${groupId}`;
+
+    fetch(url)
     .then(response => response.json())
     .then(data => {
         const tbody = document.getElementById('students-table-body');
@@ -158,6 +183,11 @@ function loadStudents() {
 // Применение фильтров посещаемости
 function applyFilters() {
     loadAttendance();
+}
+
+// Применение фильтров студентов
+function applyStudentFilters() {
+    loadStudents();
 }
 
 // Обновление статуса посещаемости

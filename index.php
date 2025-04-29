@@ -49,7 +49,7 @@
 							<option value="">Все предметы</option>
 						</select>
 						<input type="date" id="date-filter">
-						<button class="btn" onclick="applyFilters()">Применить</button>
+						<button class="btn btn-primary" onclick="applyFilters()">Применить фильтр</button>
 					</div>
 
 					<table class="attendance-table">
@@ -93,7 +93,12 @@
 							<button class="btn btn-primary" onclick="openAddStudentModal()">Добавить студента</button>
 						</div>
 					</div>
-
+					<div class="filter-controls">
+						<select id="student-group-filter">
+							<option value="">Все группы</option>
+						</select>
+						<button class="btn btn-primary" onclick="applyStudentFilters()">Применить фильтр</button>
+					</div>
 					<table class="students-table">
 						<thead>
 							<tr>
