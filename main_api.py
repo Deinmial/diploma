@@ -28,7 +28,7 @@ console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(
 logger.addHandler(console_handler)
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "http://localhost"}})
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Инициализация базы данных
 def init_db():
