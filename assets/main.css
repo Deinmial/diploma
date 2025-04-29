@@ -274,3 +274,35 @@ opacity: 0;
         flex-direction: column;
     }
 }
+
+/* Стили для таблицы логов */
+.logs-table {
+    border-collapse: collapse;
+    width: 100%;
+    border: 1px solid #ddd;
+}
+
+.logs-table th,
+.logs-table td {
+    border: 1px solid #ddd;
+    padding: 8px;
+    text-align: left;
+}
+
+.logs-table th {
+    background-color: #f2f2f2;
+    font-weight: bold;
+}
+
+/* Стили для уровней логов */
+.log-level-info {
+    color: green;
+}
+
+.log-level-error {
+    color: red;
+}
+
+.log-level-warning {
+    color: orange;
+}
