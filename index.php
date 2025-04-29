@@ -37,21 +37,23 @@
                     <div class="page-header">
                         <h1 class="page-title">Журнал посещаемости</h1>
                         <div class="action-buttons">
-                            <button class="btn btn-primary" onclick="openAttendanceModal()">Отметить присутствие</button>
+                            <button id="upload-photo-btn" class="btn btn-primary" onclick="openAttendanceModal()" disabled>Загрузить фото студентов</button>
+                            <button id="confirm-attendance-btn" class="btn btn-primary" onclick="confirmAttendance()" disabled>Подтвердить посещаемость</button>
                         </div>
                     </div>
 
                     <div class="filter-controls">
-                        <select id="group-filter">
-                            <option value="">Все группы</option>
+                        <select id="group-filter" required>
+                            <option value="">Выберите группу</option>
                         </select>
-                        <select id="subject-filter">
-                            <option value="">Все предметы</option>
+                        <select id="subject-filter" required>
+                            <option value="">Выберите предмет</option>
                         </select>
-                        <input type="date" id="date-filter">
+                        <input type="date" id="date-filter" value="<?php echo date('Y-m-d'); ?>" required>
                         <button class="btn btn-primary" onclick="applyFilters()">Применить фильтр</button>
                     </div>
 
+                    <div class="loader" id="attendance-loader" style="display: none;"></div>
                     <table class="attendance-table">
                         <thead>
                             <tr>
@@ -66,21 +68,25 @@
                         <tbody id="attendance-table-body"></tbody>
                     </table>
 
-                    <!-- Модальное окно для посещаемости -->
+                    <!-- Модальное окно для загрузки фото -->
                     <div id="attendance-modal" style="display: none;">
                         <div class="modal-content">
-                            <h2>Отметить присутствие</h2>
+                            <h2>Загрузить фото студентов</h2>
                             <form id="attendance-form">
+                                <label>Группа:</label>
+                                <input type="text" id="modal-group" readonly>
                                 <label>Предмет:</label>
-                                <select id="modal-subject" required></select>
+                                <input type="text" id="modal-subject" readonly>
                                 <label>Дата:</label>
-                                <input type="date" id="modal-date" value="<?php echo date('Y-m-d'); ?>" required>
+                                <input type="text" id="modal-date" readonly>
                                 <label>Изображение:</label>
                                 <input type="file" id="modal-image" accept="image/*" required>
-                                <button type="submit" class="btn btn-primary">Отправить</button>
+                                <button type="submit" class="btn btn-primary">Загрузить</button>
                                 <button type="button" class="btn" onclick="closeAttendanceModal()">Отмена</button>
                             </form>
-                            <div id="face-results"></div>
+                            <div class="loader" id="modal-loader" style="display: none;"></div>
+                            <div id="face-results" class="face-results"></div>
+                            <button id="confirm-modal-attendance" class="btn btn-primary" style="display: none;">Подтвердить</button>
                         </div>
                     </div>
                 </div>
@@ -99,6 +105,7 @@
                         </select>
                         <button class="btn btn-primary" onclick="applyStudentFilters()">Применить фильтр</button>
                     </div>
+                    <div class="loader" id="students-loader" style="display: none;"></div>
                     <table class="students-table">
                         <thead>
                             <tr>
@@ -126,6 +133,7 @@
                                 <button type="submit" class="btn btn-primary">Сохранить</button>
                                 <button type="button" class="btn" onclick="closeAddStudentModal()">Отмена</button>
                             </form>
+                            <div class="loader" id="add-student-loader" style="display: none;"></div>
                         </div>
                     </div>
 
@@ -140,6 +148,7 @@
                                 <button type="submit" class="btn btn-primary">Загрузить</button>
                                 <button type="button" class="btn" onclick="closeUploadPhotoModal()">Отмена</button>
                             </form>
+                            <div class="loader" id="upload-photo-loader" style="display: none;"></div>
                         </div>
                     </div>
                 </div>
@@ -149,6 +158,7 @@
                     <div class="page-header">
                         <h1 class="page-title">Логи системы</h1>
                     </div>
+                    <div class="loader" id="logs-loader" style="display: none;"></div>
                     <table class="logs-table">
                         <thead>
                             <tr>
