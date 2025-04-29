@@ -1,6 +1,7 @@
 function showSection(section) {
     document.getElementById('attendance-section').style.display = section === 'attendance' ? 'block' : 'none';
     document.getElementById('students-section').style.display = section === 'students' ? 'block' : 'none';
+    document.getElementById('logs-section').style.display = section === 'logs' ? 'block' : 'none';
     document.querySelectorAll('.sidebar-nav a').forEach(a => a.classList.remove('active'));
     document.querySelector(`.sidebar-nav a[onclick="showSection('${section}')"]`).classList.add('active');
     if (section === 'attendance') {
@@ -10,6 +11,9 @@ function showSection(section) {
         console.log('Showing students section');
         loadStudentsFilters();
         loadStudents();
+    } else if (section === 'logs') {
+        console.log('Showing logs section');
+        loadLogs();
     }
     localStorage.setItem('activeSection', section);
 }
@@ -178,6 +182,71 @@ function loadStudents() {
             tbody.appendChild(tr);
         });
     });
+}
+
+// Загрузка логов
+function loadLogs() {
+    console.log('Starting loadLogs');
+    fetch('http://localhost:5000/logs')
+    .then(response => {
+        if (!response.ok) throw new Error('Failed to load logs');
+        return response.json();
+    })
+    .then(data => {
+        console.log('Logs received:', data);
+        const tbody = document.getElementById('logs-table-body');
+        tbody.innerHTML = '';
+        if (data.error) {
+            tbody.innerHTML = `<tr><td colspan="4">${data.error}</td></tr>`;
+            return;
+        }
+
+        // Парсинг логов
+        const parsedLogs = data.logs.map(log => {
+            const parts = log.match(/^(\S+ \S+,\d{3}) - (\w+) - (.+)$/);
+            if (!parts) {
+                console.warn('Failed to parse log:', log);
+                return {
+                    timestamp: '',
+                    level: 'UNKNOWN',
+                    message: log,
+                    raw: log
+                };
+            }
+            return {
+                timestamp: parts[1].replace(',', '.'), // Заменяем запятую на точку для Date
+                                         level: parts[2],
+                                         message: parts[3],
+                                         raw: log
+            };
+        });
+
+        // Сортировка: по времени (убывание), затем по уровню (ERROR > WARNING > INFO)
+        parsedLogs.sort((a, b) => {
+            const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+            const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+            if (timeA !== timeB) {
+                return timeB - timeA; // Новые записи сверху
+            }
+            const levelPriority = { 'ERROR': 3, 'WARNING': 2, 'INFO': 1, 'UNKNOWN': 0 };
+            return (levelPriority[b.level] || 0) - (levelPriority[a.level] || 0);
+        });
+
+        console.log('Sorted logs:', parsedLogs);
+
+        // Отображение отсортированных логов
+        parsedLogs.forEach((log, index) => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+            <td>${index + 1}</td>
+            <td>${log.timestamp.replace('.', ',') || 'Неизвестно'}</td>
+            <td class="log-level-${log.level.toLowerCase()}">${log.level}</td>
+            <td>${log.message}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    })
+    .catch(error => console.error('Error loading logs:', error));
 }
 
 // Применение фильтров посещаемости
