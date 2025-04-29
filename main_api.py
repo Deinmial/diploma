@@ -5,6 +5,7 @@ import psycopg2
 import numpy as np
 import os
 import logging
+from logging.handlers import RotatingFileHandler
 from typing import List
 from PIL import Image
 from datetime import datetime
@@ -12,16 +13,18 @@ import threading
 import time
 from main_encoding import extract_face_encodings, save_face_encodings, process_single_image, has_student_photo, delete_student_photos
 
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('face_encoding.log'),
-        logging.StreamHandler()
-    ]
-)
+# Настройка логирования с ротацией
+log_file = "/home/dmitry/PycharmProjects/diploma/face_encoding.log"
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+# Ротация: 10 МБ на файл, до 5 резервных файлов
+file_handler = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logger.addHandler(file_handler)
+# Вывод в консоль
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logger.addHandler(console_handler)
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "http://localhost"}})
@@ -198,7 +201,7 @@ def upload_student_photo():
     student_id = request.form['student_id']
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     image_id = f"{timestamp}_{os.path.splitext(file.filename)[0]}"
-    uploads_dir = "uploads"
+    uploads_dir = "Uploads"
     os.makedirs(uploads_dir, exist_ok=True)
     image_path = os.path.join(uploads_dir, f"{image_id}.png")
 
@@ -406,6 +409,26 @@ def process_image():
         logger.error(f"Неизвестная ошибка: {e}")
         logger.info(f"Файл {image_path} не удалён из-за неизвестной ошибки")
         return jsonify({'error': f"Внутренняя ошибка сервера: {str(e)}"}), 500
+
+# Маршрут для получения логов
+@app.route('/logs', methods=['GET'])
+def get_logs():
+    log_file = "/home/dmitry/PycharmProjects/diploma/face_encoding.log"
+    try:
+        logs = []
+        # Чтение основного файла и резервных файлов (face_encoding.log.1, .2, ..., .5)
+        log_files = [log_file] + [f"{log_file}.{i}" for i in range(1, 6)]
+        for file in log_files:
+            if os.path.exists(file):
+                with open(file, 'r', encoding='utf-8') as f:
+                    logs.extend([line.strip() for line in f if line.strip()])
+        if not logs:
+            logger.warning("Логи не найдены")
+            return jsonify({'logs': [], 'error': 'Логи не найдены'}), 200
+        return jsonify({'logs': logs}), 200
+    except Exception as e:
+        logger.error(f"Ошибка чтения логов: {e}")
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
