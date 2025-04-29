@@ -106,15 +106,22 @@ def get_subjects():
 # Маршрут для получения списка студентов
 @app.route('/students', methods=['GET'])
 def get_students():
+    group_id = request.args.get('group_id')
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("""
+        query = """
             SELECT s.student_id, s.full_name, g.group_name, f.image_id
             FROM students s
             LEFT JOIN groups g ON s.group_id = g.group_id
             LEFT JOIN faces f ON s.student_id = f.student_id
-        """)
+        """
+        params = []
+        if group_id:
+            query += " WHERE s.group_id = %s"
+            params.append(group_id)
+        query += " ORDER BY s.full_name ASC"
+        cursor.execute(query, params)
         students = [
             {
                 'student_id': row[0],
@@ -191,7 +198,7 @@ def upload_student_photo():
     student_id = request.form['student_id']
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     image_id = f"{timestamp}_{os.path.splitext(file.filename)[0]}"
-    uploads_dir = "/home/dmitry/PycharmProjects/diploma/uploads"
+    uploads_dir = "uploads"
     os.makedirs(uploads_dir, exist_ok=True)
     image_path = os.path.join(uploads_dir, f"{image_id}.png")
 
@@ -202,11 +209,11 @@ def upload_student_photo():
         # Проверка количества лиц
         encodings = extract_face_encodings(image_path)
         if len(encodings) == 0:
-            os.remove(image_path)  # Удаляем файл, если лиц нет
+            os.remove(image_path)
             logger.warning(f"Лицо не найдено в изображении: {image_path}")
             return jsonify({'error': 'Лицо не найдено на изображении'}), 400
         if len(encodings) > 1:
-            os.remove(image_path)  # Удаляем файл, если лиц больше одного
+            os.remove(image_path)
             logger.warning(f"Найдено более одного лица в изображении: {image_path}")
             return jsonify({'error': 'На изображении должно быть ровно одно лицо'}), 400
 
@@ -215,12 +222,12 @@ def upload_student_photo():
         if success:
             return jsonify({'status': 'success', 'image_id': image_id}), 200
         else:
-            os.remove(image_path)  # Удаляем файл, если обработка не удалась
+            os.remove(image_path)
             return jsonify({'error': 'Не удалось обработать изображение'}), 400
     except Exception as e:
         logger.error(f"Ошибка обработки изображения: {e}")
         if os.path.exists(image_path):
-            os.remove(image_path)  # Удаляем файл при любой ошибке
+            os.remove(image_path)
         return jsonify({'error': str(e)}), 500
 
 # Маршрут для удаления фото студента
