@@ -1,3 +1,4 @@
+// Перед работой localhost заменить на ip адрес устройства. Иначе не будет работать
 function showSection(section) {
     document.getElementById('attendance-section').style.display = section === 'attendance' ? 'block' : 'none';
     document.getElementById('students-section').style.display = section === 'students' ? 'block' : 'none';
