@@ -14,7 +14,7 @@ import time
 from main_encoding import extract_face_encodings, save_face_encodings, process_single_image, has_student_photo, delete_student_photos
 
 # Настройка логирования с ротацией
-log_file = "/home/dmitry/PycharmProjects/diploma/face_encoding.log"
+log_file = "face_encoding.log"
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 # Ротация: 10 МБ на файл, до 5 резервных файлов
@@ -28,6 +28,71 @@ logger.addHandler(console_handler)
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "http://localhost"}})
+
+# Инициализация базы данных: создание таблиц, если они не существуют
+def init_db():
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Создание таблиц с IF NOT EXISTS
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS groups (
+                group_id SERIAL PRIMARY KEY,
+                group_name TEXT NOT NULL UNIQUE
+            );
+        """)
+        logger.info("Таблица groups проверена/создана")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS subjects (
+                subject_id SERIAL PRIMARY KEY,
+                subject_name TEXT NOT NULL UNIQUE
+            );
+        """)
+        logger.info("Таблица subjects проверена/создана")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS students (
+                student_id SERIAL PRIMARY KEY,
+                full_name TEXT NOT NULL,
+                group_id INTEGER REFERENCES groups(group_id)
+            );
+        """)
+        logger.info("Таблица students проверена/создана")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS faces (
+                face_id SERIAL PRIMARY KEY,
+                student_id INTEGER REFERENCES students(student_id),
+                face_encoding FLOAT[] NOT NULL,
+                image_id TEXT NOT NULL
+            );
+        """)
+        logger.info("Таблица faces проверена/создана")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS attendance (
+                attendance_id SERIAL PRIMARY KEY,
+                student_id INTEGER REFERENCES students(student_id),
+                subject_id INTEGER REFERENCES subjects(subject_id),
+                attendance_date DATE NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('present', 'absent')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        logger.info("Таблица attendance проверена/создана")
+
+        conn.commit()
+        logger.info("Инициализация базы данных завершена")
+    except Exception as e:
+        logger.error(f"Ошибка при инициализации базы данных: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            conn.close()
 
 # Функция для отложенного удаления файлов
 def delayed_delete(file_paths, delay_seconds):
@@ -201,7 +266,7 @@ def upload_student_photo():
     student_id = request.form['student_id']
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     image_id = f"{timestamp}_{os.path.splitext(file.filename)[0]}"
-    uploads_dir = "Uploads"
+    uploads_dir = "uploads"
     os.makedirs(uploads_dir, exist_ok=True)
     image_path = os.path.join(uploads_dir, f"{image_id}.png")
 
@@ -413,7 +478,7 @@ def process_image():
 # Маршрут для получения логов
 @app.route('/logs', methods=['GET'])
 def get_logs():
-    log_file = "/home/dmitry/PycharmProjects/diploma/face_encoding.log"
+    log_file = "face_encoding.log"
     try:
         logs = []
         # Чтение основного файла и резервных файлов (face_encoding.log.1, .2, ..., .5)
@@ -431,4 +496,5 @@ def get_logs():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
+    init_db()  # Инициализация таблиц при запуске
     app.run(host='0.0.0.0', port=5000)
