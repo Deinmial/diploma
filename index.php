@@ -50,23 +50,24 @@
                             <option value="">Выберите предмет</option>
                         </select>
                         <input type="date" id="date-filter" value="<?php echo date('Y-m-d'); ?>" required>
-                        <button class="btn btn-primary" onclick="applyFilters()">Применить фильтр</button>
                     </div>
 
                     <div class="loader" id="attendance-loader" style="display: none;"></div>
-                    <table class="attendance-table">
-                        <thead>
-                            <tr>
-                                <th>№</th>
-                                <th>Студент</th>
-                                <th>Группа</th>
-                                <th>Дата</th>
-                                <th>Предмет</th>
-                                <th>Статус</th>
-                            </tr>
-                        </thead>
-                        <tbody id="attendance-table-body"></tbody>
-                    </table>
+                    <div class="table-container">
+                        <table class="attendance-table">
+                            <thead>
+                                <tr>
+                                    <th>№</th>
+                                    <th>Студент</th>
+                                    <th>Группа</th>
+                                    <th>Дата</th>
+                                    <th>Предмет</th>
+                                    <th>Статус</th>
+                                </tr>
+                            </thead>
+                            <tbody id="attendance-table-body"></tbody>
+                        </table>
+                    </div>
 
                     <!-- Модальное окно для загрузки фото -->
                     <div id="attendance-modal" style="display: none;">
@@ -103,21 +104,22 @@
                         <select id="student-group-filter">
                             <option value="">Все группы</option>
                         </select>
-                        <button class="btn btn-primary" onclick="applyStudentFilters()">Применить фильтр</button>
                     </div>
                     <div class="loader" id="students-loader" style="display: none;"></div>
-                    <table class="students-table">
-                        <thead>
-                            <tr>
-                                <th>№</th>
-                                <th>ФИО</th>
-                                <th>Группа</th>
-                                <th>Фото</th>
-                                <th>Действия</th>
-                            </tr>
-                        </thead>
-                        <tbody id="students-table-body"></tbody>
-                    </table>
+                    <div class="table-container">
+                        <table class="students-table">
+                            <thead>
+                                <tr>
+                                    <th>№</th>
+                                    <th>ФИО</th>
+                                    <th>Группа</th>
+                                    <th>Фото</th>
+                                    <th>Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody id="students-table-body"></tbody>
+                        </table>
+                    </div>
 
                     <!-- Модальное окно для добавления студента -->
                     <div id="add-student-modal" style="display: none;">
@@ -159,17 +161,19 @@
                         <h1 class="page-title">Логи системы</h1>
                     </div>
                     <div class="loader" id="logs-loader" style="display: none;"></div>
-                    <table class="logs-table">
-                        <thead>
-                            <tr>
-                                <th>№</th>
-                                <th>Время</th>
-                                <th>Уровень</th>
-                                <th>Сообщение</th>
-                            </tr>
-                        </thead>
-                        <tbody id="logs-table-body"></tbody>
-                    </table>
+                    <div class="table-container">
+                        <table class="logs-table">
+                            <thead>
+                                <tr>
+                                    <th>№</th>
+                                    <th>Время</th>
+                                    <th>Уровень</th>
+                                    <th>Сообщение</th>
+                                </tr>
+                            </thead>
+                            <tbody id="logs-table-body"></tbody>
+                        </table>
+                    </div>
                 </div>
             </main>
         </div>
