@@ -1,4 +1,22 @@
-// Перед работой localhost заменить на ip адрес устройства. Иначе не будет работать
+// Перед работой localhost заменить на ip адрес устройства.
+// Реализация динамического IP. Если не работает, читай выше.
+const API_BASE_URL = window.location.hostname === 'localhost' ? 'http://localhost:5000' : `http://${window.location.hostname}:5000`;
+// Пример использования
+// fetch(`${API_BASE_URL}/students`, { ... })
+
+// Дебаунсинг
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
 function showSection(section) {
     document.getElementById('attendance-section').style.display = section === 'attendance' ? 'block' : 'none';
     document.getElementById('students-section').style.display = section === 'students' ? 'block' : 'none';
@@ -51,7 +69,6 @@ function loadFilters() {
         localStorage.setItem('date-filter', today);
     }
 
-    // Восстановить сохранённые фильтры
     const savedGroup = localStorage.getItem('group-filter') || '';
     const savedSubject = localStorage.getItem('subject-filter') || '';
     const savedDate = localStorage.getItem('date-filter') || dateFilter.value;
@@ -59,8 +76,8 @@ function loadFilters() {
     dateFilter.value = savedDate;
 
     Promise.all([
-        fetch('http://localhost:5000/groups').then(response => response.json()),
-                fetch('http://localhost:5000/subjects').then(response => response.json())
+        fetch(`${API_BASE_URL}/groups`).then(response => response.json()),
+                fetch(`${API_BASE_URL}/subjects`).then(response => response.json())
     ])
     .then(([groupData, subjectData]) => {
         const groupSelect = document.getElementById('group-filter');
@@ -83,7 +100,16 @@ function loadFilters() {
             subjectSelect.appendChild(option);
         });
 
-        // Автоматически применить фильтры, если они все заполнены
+        // Изменено: Применяем debounce к обработчикам onchange
+        const applyAttendanceFilters = debounce(() => {
+            saveFilters();
+            loadAttendance();
+        }, 300);
+
+        groupSelect.onchange = applyAttendanceFilters;
+        subjectSelect.onchange = applyAttendanceFilters;
+        dateFilter.onchange = applyAttendanceFilters;
+
         if (savedGroup && savedSubject && savedDate) {
             loadAttendance();
         }
@@ -91,11 +117,10 @@ function loadFilters() {
     .catch(error => console.error('Error loading filters:', error));
 }
 
-// Загрузка фильтров для студентов
 function loadStudentsFilters() {
     const savedStudentGroup = localStorage.getItem('student-group-filter') || '';
 
-    fetch('http://localhost:5000/groups')
+    fetch(`${API_BASE_URL}/groups`)
     .then(response => {
         if (!response.ok) throw new Error('Failed to load groups');
         return response.json();
@@ -111,7 +136,12 @@ function loadStudentsFilters() {
             groupSelect.appendChild(option);
         });
 
-        // Автоматически применить фильтр, если он заполнен
+        // Изменено: Применяем debounce к обработчику onchange
+        groupSelect.onchange = debounce(() => {
+            saveFilters();
+            loadStudents();
+        }, 300);
+
         if (savedStudentGroup) {
             loadStudents();
         }
@@ -121,7 +151,7 @@ function loadStudentsFilters() {
 
 // Загрузка групп для модального окна добавления студента
 function loadGroupsForStudentModal() {
-    fetch('http://localhost:5000/groups')
+    fetch(`${API_BASE_URL}/groups`)
     .then(response => {
         if (!response.ok) throw new Error('Failed to load groups');
         return response.json();
@@ -157,7 +187,7 @@ function loadAttendance() {
     }
 
     showLoader('attendance-loader');
-    let url = `http://localhost:5000/attendance?group_id=${groupId}&subject_id=${subjectId}&date=${date}`;
+    let url = `${API_BASE_URL}/attendance?group_id=${groupId}&subject_id=${subjectId}&date=${date}`;
 
     fetch(url)
     .then(response => {
@@ -211,7 +241,7 @@ function loadAttendance() {
 // Загрузка таблицы студентов
 function loadStudents() {
     const groupId = document.getElementById('student-group-filter').value;
-    let url = 'http://localhost:5000/students';
+    let url = `${API_BASE_URL}/students`;
     if (groupId) url += `?group_id=${groupId}`;
 
     showLoader('students-loader');
@@ -245,7 +275,7 @@ function loadStudents() {
 // Загрузка логов
 function loadLogs() {
     showLoader('logs-loader');
-    fetch('http://localhost:5000/logs')
+    fetch(`${API_BASE_URL}/logs`)
     .then(response => {
         if (!response.ok) throw new Error('Failed to load logs');
         return response.json();
@@ -330,7 +360,7 @@ function updateStatus(studentId, currentStatus, attendanceId, date, subjectId, g
         status: newStatus
     };
 
-    fetch('http://localhost:5000/attendance', {
+    fetch(`${API_BASE_URL}/attendance`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -360,7 +390,7 @@ function confirmAttendance() {
     }
 
     showLoader('attendance-loader');
-    fetch(`http://localhost:5000/attendance?group_id=${groupId}&subject_id=${subjectId}&date=${date}`)
+    fetch(`${API_BASE_URL}/attendance?group_id=${groupId}&subject_id=${subjectId}&date=${date}`)
     .then(response => response.json())
     .then(data => {
         if (data.error) {
@@ -375,7 +405,7 @@ function confirmAttendance() {
                                                                  group_id: parseInt(groupId)
         }));
 
-        fetch('http://localhost:5000/bulk_mark_attendance', {
+        fetch(`${API_BASE_URL}/bulk_mark_attendance'`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ records: attendanceRecords })
@@ -402,7 +432,7 @@ function deleteStudent(studentId, fullName) {
         return;
     }
     showLoader('students-loader');
-    fetch(`http://localhost:5000/students/${studentId}`, {
+    fetch(`${API_BASE_URL}/students/${studentId}`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' }
     })
@@ -424,7 +454,7 @@ function deleteStudentPhoto(studentId) {
         return;
     }
     showLoader('students-loader');
-    fetch(`http://localhost:5000/delete_student_photo/${studentId}`, {
+    fetch(`${API_BASE_URL}/delete_student_photo/${studentId}`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' }
     })
@@ -549,7 +579,7 @@ document.getElementById('add-student-form').addEventListener('submit', function(
 
     showLoader('add-student-loader'); // Показываем спиннер
 
-    fetch('http://localhost:5000/students', {
+    fetch(`${API_BASE_URL}/students`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ full_name: fullName, group_id: groupId })
@@ -582,7 +612,7 @@ document.getElementById('upload-photo-form').addEventListener('submit', function
 
     showLoader('upload-photo-loader'); // Показываем спиннер
 
-    fetch('http://localhost:5000/upload_student_photo', {
+    fetch(`${API_BASE_URL}/upload_student_photo`, {
         method: 'POST',
         body: formData
     })
@@ -624,7 +654,7 @@ document.getElementById('attendance-form').addEventListener('submit', function(e
     formData.append('group_id', groupId);
 
     showLoader('modal-loader');
-    fetch('http://localhost:5000/process_image', {
+    fetch(`${API_BASE_URL}/process_image`, {
         method: 'POST',
         body: formData
     })
@@ -678,7 +708,7 @@ document.getElementById('confirm-modal-attendance').addEventListener('click', fu
     const promises = lastProcessedResults
     .filter(result => result.status === 'present' && result.matches.length > 0)
     .map(result => {
-        return fetch('http://localhost:5000/mark_attendance', {
+        return fetch(`${API_BASE_URL}/mark_attendance`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
