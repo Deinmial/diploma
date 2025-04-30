@@ -30,7 +30,9 @@ CREATE TABLE attendance (
     attendance_id SERIAL PRIMARY KEY,
     student_id INTEGER REFERENCES students(student_id),
     subject_id INTEGER REFERENCES subjects(subject_id),
+    group_id INTEGER REFERENCES groups(group_id),
     attendance_date DATE NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('present', 'absent')),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(student_id, subject_id, group_id, attendance_date)
 );
