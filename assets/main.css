@@ -8,12 +8,14 @@ body {
     padding: 0;
     background-color: #f5f5f5;
     color: #333;
+    overflow-x: hidden; /* Добавлено: Предотвращаем горизонтальную прокрутку */
 }
 
 .container {
     max-width: 1200px;
     margin: 0 auto;
     padding: 20px;
+    width: 100%; /* Добавлено: Убедимся, что контейнер не превышает ширину экрана */
 }
 
 header {
@@ -22,12 +24,17 @@ header {
     padding: 20px 0;
     margin-bottom: 30px;
     box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    width: 100%; /* Добавлено: Растягиваем header на всю ширину */
 }
 
 .header-content {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    max-width: 1200px; /* Добавлено: Ограничиваем ширину контента */
+    width: 100%; /* Добавлено: Убедимся, что контент растягивается */
+    margin: 0 auto; /* Добавлено: Центрируем */
+    padding: 0 20px; /* Добавлено: Адаптивные отступы */
 }
 
 .logo {
@@ -94,6 +101,7 @@ header {
     border-radius: 8px;
     padding: 20px;
     box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    overflow-x: hidden; /* Добавлено: Предотвращаем горизонтальную прокрутку контента */
 }
 
 .page-header {
@@ -103,6 +111,7 @@ header {
     margin-bottom: 20px;
     padding-bottom: 15px;
     border-bottom: 1px solid #eee;
+    flex-wrap: wrap; /* Добавлено: Позволяем перенос на мобильных */
 }
 
 .page-title {
@@ -142,24 +151,33 @@ header {
     cursor: not-allowed;
 }
 
-.attendance-table, .students-table {
+.attendance-table, .students-table, .logs-table {
     width: 100%;
     border-collapse: collapse;
 }
 
+/* Добавлено: Контейнер для таблиц с горизонтальной прокруткой */
+.table-container {
+    overflow-x: auto;
+    width: 100%;
+    margin-bottom: 20px;
+}
+
 .attendance-table th, .attendance-table td,
-.students-table th, .students-table td {
+.students-table th, .students-table td,
+.logs-table th, .logs-table td {
     padding: 12px 15px;
     text-align: left;
     border-bottom: 1px solid #eee;
+    white-space: nowrap; /* Добавлено: Предотвращаем перенос текста в ячейках */
 }
 
-.attendance-table th, .students-table th {
+.attendance-table th, .students-table th, .logs-table th {
     background-color: #f8f9fa;
     font-weight: 600;
 }
 
-.attendance-table tr:hover, .students-table tr:hover {
+.attendance-table tr:hover, .students-table tr:hover, .logs-table tr:hover {
     background-color: #f8f9fa;
 }
 
@@ -203,12 +221,14 @@ header {
     display: flex;
     gap: 15px;
     margin-bottom: 20px;
+    flex-wrap: wrap; /* Добавлено: Позволяем перенос элементов */
 }
 
 .filter-controls select, .filter-controls input {
     padding: 8px 12px;
     border: 1px solid #ddd;
     border-radius: 4px;
+    width: 100%; /* Добавлено: Элементы занимают полную ширину на мобильных */
 }
 
 #attendance-modal, #add-student-modal, #upload-photo-modal {
@@ -222,6 +242,7 @@ display: flex;
 align-items: center;
 justify-content: center;
 transition: opacity 0.3s;
+overflow: auto; /* Добавлено: Прокрутка, если контент не помещается */
 }
 
 #attendance-modal[style*="display: none"],
@@ -236,6 +257,8 @@ opacity: 0;
     border-radius: 8px;
     max-width: 500px;
     width: 90%;
+    max-height: 90vh; /* Добавлено: Ограничиваем высоту */
+    overflow-y: auto; /* Добавлено: Внутренняя прокрутка */
 }
 
 .modal-content h2 {
@@ -252,6 +275,7 @@ opacity: 0;
     padding: 8px 12px;
     border: 1px solid #ddd;
     border-radius: 4px;
+    width: 100%; /* Добавлено: Поля занимают полную ширину */
 }
 
 .face-results {
@@ -339,17 +363,145 @@ width: 100%;
     color: orange;
 }
 
+/* Медиа-запросы */
 @media (max-width: 768px) {
     .dashboard {
-        grid-template-columns: 1fr;
+        grid-template-columns: 1fr; /* Изменено: Сайдбар и контент в колонку */
+    }
+
+    .sidebar {
+        width: 100%; /* Добавлено: Сайдбар занимает полную ширину */
+    }
+
+    .sidebar-nav {
+        display: flex; /* Добавлено: Горизонтальная навигация */
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    .sidebar-nav li {
+        flex: 1 1 auto; /* Добавлено: Элементы навигации адаптируются */
+        margin-bottom: 0;
+    }
+
+    .sidebar-nav a {
+        padding: 8px; /* Добавлено: Уменьшаем отступы */
+        font-size: 14px; /* Добавлено: Уменьшаем шрифт */
+        text-align: center; /* Добавлено: Центрируем текст */
     }
 
     .header-content {
-        flex-direction: column;
+        flex-direction: column; /* Оставлено: Колонка для header */
         gap: 15px;
+        padding: 0 15px; /* Изменено: Уменьшаем отступы */
+    }
+
+    .logo {
+        font-size: 20px; /* Добавлено: Уменьшаем шрифт */
+    }
+
+    .user-info {
+        font-size: 14px; /* Добавлено: Уменьшаем шрифт */
     }
 
     .filter-controls {
-        flex-direction: column;
+        flex-direction: column; /* Оставлено: Фильтры в колонку */
+        gap: 10px;
+    }
+
+    .page-header {
+        flex-direction: column; /* Добавлено: Заголовок и кнопки в колонку */
+        align-items: flex-start;
+        gap: 10px;
+    }
+
+    .page-title {
+        font-size: 18px; /* Добавлено: Уменьшаем шрифт */
+    }
+
+    .action-buttons {
+        width: 100%; /* Добавлено: Кнопки занимают полную ширину */
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    .attendance-table th, .attendance-table td,
+    .students-table th, .students-table td,
+    .logs-table th, .logs-table td {
+        padding: 8px; /* Добавлено: Уменьшаем отступы */
+        font-size: 14px; /* Добавлено: Уменьшаем шрифт */
+    }
+
+    .status-switch {
+        flex-direction: column; /* Добавлено: Кнопки статуса в колонку */
+        border-radius: 4px;
+        overflow: visible;
+    }
+
+    .status-switch-btn {
+        width: 100%; /* Добавлено: Кнопки занимают полную ширину */
+        padding: 8px;
+    }
+
+    .student-photo {
+        max-width: 40px; /* Добавлено: Уменьшаем размер фото */
+    }
+
+    .modal-content {
+        width: 95%; /* Изменено: Уменьшаем ширину модального окна */
+        padding: 15px;
+    }
+
+    .face-result {
+        width: 100px; /* Добавлено: Уменьшаем размер результата */
+    }
+
+    .face-image {
+        width: 80px; /* Добавлено: Уменьшаем размер изображения */
+        height: 80px;
+    }
+}
+
+@media (max-width: 480px) {
+    .container {
+        padding: 10px; /* Добавлено: Уменьшаем отступы */
+    }
+
+    .header-content {
+        padding: 0 10px; /* Добавлено: Уменьшаем отступы */
+    }
+
+    .logo {
+        font-size: 18px; /* Добавлено: Уменьшаем шрифт */
+    }
+
+    .user-info {
+        font-size: 12px; /* Добавлено: Уменьшаем шрифт */
+    }
+
+    .sidebar-nav a {
+        font-size: 12px; /* Добавлено: Уменьшаем шрифт */
+        padding: 6px;
+    }
+
+    .page-title {
+        font-size: 16px; /* Добавлено: Уменьшаем шрифт */
+    }
+
+    .btn {
+        padding: 6px 12px; /* Добавлено: Уменьшаем кнопки */
+        font-size: 14px;
+    }
+
+    .attendance-table th, .attendance-table td,
+    .students-table th, .students-table td,
+    .logs-table th, .logs-table td {
+        padding: 6px; /* Добавлено: Уменьшаем отступы */
+        font-size: 12px; /* Добавлено: Уменьшаем шрифт */
+    }
+
+    .modal-content {
+        padding: 10px; /* Добавлено: Уменьшаем отступы */
     }
 }
