@@ -11,20 +11,21 @@ from PIL import Image
 from datetime import datetime
 import threading
 import time
-from main_encoding import extract_face_encodings, save_face_encodings, process_single_image, has_student_photo, delete_student_photos
+import asyncio
 import uuid
+import json
+from main_encoding import extract_face_encodings, save_face_encodings, process_single_image, has_student_photo, delete_student_photos
+from psycopg2.extras import Json
 
-# Настройка логирования с ротацией
+# Настройка логирования
 log_file = "face_encoding.log"
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-# Ротация: 10 МБ на файл, до 5 резервных файлов
 file_handler = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5)
-file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
 logger.addHandler(file_handler)
-# Вывод в консоль
 console_handler = logging.StreamHandler()
-console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+console_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
 logger.addHandler(console_handler)
 
 app = Flask(__name__)
@@ -67,7 +68,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS faces (
                 face_id SERIAL PRIMARY KEY,
                 student_id INTEGER REFERENCES students(student_id),
-                face_encoding FLOAT[] NOT NULL,
+                face_encoding JSONB NOT NULL,
                 image_id TEXT NOT NULL
             );
         """)
@@ -87,6 +88,26 @@ def init_db():
         """)
         logger.info("Таблица attendance проверена/создана")
 
+        # Создание GIN-индекса для face_encoding
+        cursor.execute("""
+            DO $$ 
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT FROM pg_indexes 
+                    WHERE schemaname = 'public' 
+                    AND tablename = 'faces' 
+                    AND indexname = 'faces_encoding_gin'
+                ) THEN
+                    CREATE INDEX faces_encoding_gin 
+                    ON faces 
+                    USING GIN (face_encoding);
+                    COMMENT ON INDEX faces_encoding_gin 
+                    IS 'GIN-индекс для ускорения поиска по эмбеддингам лиц в столбце face_encoding (JSONB)';
+                END IF;
+            END $$;
+        """)
+        logger.info("GIN-индекс faces_encoding_gin проверен/создан")
+
         conn.commit()
         logger.info("Инициализация базы данных завершена")
     except Exception as e:
@@ -97,22 +118,7 @@ def init_db():
         if conn:
             conn.close()
 
-# Функция для отложенного удаления файлов
-def delayed_delete(file_paths, delay_seconds):
-    logger.info(f"Запуск отложенного удаления для файлов: {file_paths} с задержкой {delay_seconds} секунд")
-    try:
-        time.sleep(delay_seconds)
-        for file_path in file_paths:
-            if os.path.exists(file_path):
-                logger.info(f"Попытка удаления файла: {file_path}")
-                os.remove(file_path)
-                logger.info(f"Файл {file_path} удалён после задержки")
-            else:
-                logger.warning(f"Файл {file_path} не существует при попытке удаления")
-    except Exception as e:
-        logger.error(f"Ошибка при отложенном удалении файлов: {e}")
-
-# Подключение к PostgreSQL
+# Подключение к PostgreSQL с настройкой JSONB
 def get_db_connection():
     try:
         conn = psycopg2.connect(
@@ -122,6 +128,8 @@ def get_db_connection():
             host="localhost",
             port="5432"
         )
+        # Отключение автоматической десериализации JSONB
+        psycopg2.extras.register_default_jsonb(conn, globally=False, loads=lambda x: x)
         return conn
     except psycopg2.Error as e:
         logger.error(f"Ошибка подключения к БД: {e}")
@@ -132,7 +140,6 @@ def save_cropped_faces(image_path: str, locations: List[tuple], filename: str) -
     faces_dir = "/opt/lampp/htdocs/faces"
     os.makedirs(faces_dir, exist_ok=True)
     face_paths = []
-
     try:
         image = Image.open(image_path)
         for i, (top, right, bottom, left) in enumerate(locations):
@@ -145,6 +152,32 @@ def save_cropped_faces(image_path: str, locations: List[tuple], filename: str) -
         return face_paths
     except Exception as e:
         logger.error(f"Ошибка при сохранении обрезанных лиц: {e}")
+        return []
+
+# Функция для отложенного удаления файлов
+def delayed_delete(file_paths, delay_seconds):
+    logger.info(f"Запуск отложенного удаления для {file_paths} через {delay_seconds} секунд")
+    try:
+        time.sleep(delay_seconds)
+        for file_path in file_paths:
+            if os.path.exists(file_path):
+                logger.info(f"Попытка удаления файла: {file_path}")
+                os.remove(file_path)
+                logger.info(f"Файл {file_path} удалён после задержки")
+            else:
+                logger.warning(f"Файл не найден: {file_path}")
+    except Exception as e:
+        logger.error(f"Ошибка при отложенном удалении файлов: {e}")
+
+# Асинхронная обработка пакета лиц
+async def process_encoding_batch(image_path: str, batch_locations: List[tuple], batch_index: int) -> List[np.ndarray]:
+    try:
+        image = face_recognition.load_image_file(image_path)
+        encodings = face_recognition.face_encodings(image, known_face_locations=batch_locations)
+        logger.info(f"Обработан пакет {batch_index}: найдено {len(encodings)} лиц")
+        return encodings
+    except Exception as e:
+        logger.error(f"Ошибка обработки пакета {batch_index}: {e}")
         return []
 
 # Маршрут для получения списка групп
@@ -244,7 +277,7 @@ def delete_student(student_id):
 
         # Удаление связанных записей в attendance
         cursor.execute("DELETE FROM attendance WHERE student_id = %s", (student_id,))
-        # Удаление связанных записей в faces
+        # Удаление связанных записей в faces и файлов в Uploads
         delete_student_photos(student_id)
         # Удаление студента
         cursor.execute("DELETE FROM students WHERE student_id = %s", (student_id,))
@@ -263,8 +296,8 @@ def delete_student(student_id):
 @app.route('/upload_student_photo', methods=['POST'])
 def upload_student_photo():
     if 'image' not in request.files or 'student_id' not in request.form:
-        logger.error("Изображение или student_id не предоставлены")
-        return jsonify({'error': 'Требуется изображение и student_id'}), 400
+        logger.error("Отсутствуют обязательные параметры: image, student_id")
+        return jsonify({'error': 'Отсутствуют обязательные параметры'}), 400
 
     file = request.files['image']
     student_id = request.form['student_id']
@@ -276,16 +309,14 @@ def upload_student_photo():
 
     try:
         file.save(image_path)
-        logger.info(f"Сохранено изображение: {image_path}")
+        logger.info(f"Сохранено изображение студента: {image_path}")
 
         # Проверка количества лиц
         encodings = extract_face_encodings(image_path)
         if len(encodings) == 0:
-            os.remove(image_path)
             logger.warning(f"Лицо не найдено в изображении: {image_path}")
             return jsonify({'error': 'Лицо не найдено на изображении'}), 400
         if len(encodings) > 1:
-            os.remove(image_path)
             logger.warning(f"Найдено более одного лица в изображении: {image_path}")
             return jsonify({'error': 'На изображении должно быть ровно одно лицо'}), 400
 
@@ -294,12 +325,10 @@ def upload_student_photo():
         if success:
             return jsonify({'status': 'success', 'image_id': image_id}), 200
         else:
-            os.remove(image_path)
+            logger.error(f"Не удалось обработать изображение: {image_path}")
             return jsonify({'error': 'Не удалось обработать изображение'}), 400
     except Exception as e:
         logger.error(f"Ошибка обработки изображения: {e}")
-        if os.path.exists(image_path):
-            os.remove(image_path)
         return jsonify({'error': str(e)}), 500
 
 # Маршрут для удаления фото студента
@@ -407,6 +436,7 @@ def process_image():
     attendance_date = request.form['date']
     group_id = request.form['group_id']
     file = request.files['image']
+
     recognition_dir = "recognition"
     os.makedirs(recognition_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -415,13 +445,26 @@ def process_image():
     try:
         file.save(image_path)
         logger.info(f"Сохранено изображение: {image_path}")
-        encodings = extract_face_encodings(image_path)
-        locations = face_recognition.face_locations(face_recognition.load_image_file(image_path))
 
-        if not encodings:
+        # Обнаружение лиц
+        locations = face_recognition.face_locations(face_recognition.load_image_file(image_path))
+        if len(locations) > 500:
+            logger.warning(f"Обнаружено {len(locations)} лиц, превышен лимит 500")
+            os.remove(image_path)
+            return jsonify({'error': 'Слишком много лиц в изображении (максимум 500)'}), 400
+
+        if not locations:
             logger.warning(f"Лица не найдены в изображении: {image_path}")
             os.remove(image_path)
             return jsonify({'error': 'Лица не найдены на изображении'}), 400
+
+        # Пакетная обработка лиц
+        batch_size = 50
+        encodings = []
+        for i in range(0, len(locations), batch_size):
+            batch_locations = locations[i:i + batch_size]
+            batch_encodings = asyncio.run(process_encoding_batch(image_path, batch_locations, i // batch_size))
+            encodings.extend(batch_encodings)
 
         # Сохранение обрезанных лиц
         face_paths = save_cropped_faces(image_path, locations, f"{timestamp}_{file.filename}")
@@ -429,8 +472,6 @@ def process_image():
         # Подключение к БД
         conn = get_db_connection()
         cursor = conn.cursor()
-
-        # Извлечение энкодингов из БД
         cursor.execute("""
             SELECT f.face_id, f.face_encoding, s.student_id, s.full_name, s.group_id
             FROM faces f
@@ -439,7 +480,6 @@ def process_image():
         rows = cursor.fetchall()
 
         results = []
-        # Сравнение каждого лица
         for i, encoding in enumerate(encodings):
             face_id = os.path.splitext(os.path.basename(face_paths[i]))[0] if i < len(face_paths) else str(uuid.uuid4())
             face_result = {
@@ -449,30 +489,37 @@ def process_image():
                 'matches': []
             }
             for row in rows:
-                db_encoding = np.array(row[1])
-                match = face_recognition.compare_faces([db_encoding], encoding, tolerance=0.5)[0]
-                if match:
-                    student_group_id = row[4]
-                    distance = float(face_recognition.face_distance([db_encoding], encoding)[0])
-                    face_result['matches'].append({
-                        'student_id': row[2],
-                        'full_name': row[3],
-                        'distance': distance
-                    })
-                    if str(student_group_id) == group_id:
-                        face_result['status'] = 'present'
-                    else:
-                        face_result['status'] = 'other_group'
+                try:
+                    encoding_data = row[1]
+                    # Ожидаем строку JSON
+                    db_encoding = np.array(json.loads(encoding_data))
+                    match = face_recognition.compare_faces([db_encoding], encoding, tolerance=0.5)[0]
+                    if match:
+                        student_group_id = row[4]
+                        distance = float(face_recognition.face_distance([db_encoding], encoding)[0])
+                        face_result['matches'].append({
+                            'student_id': row[2],
+                            'full_name': row[3],
+                            'distance': distance
+                        })
+                        if str(student_group_id) == group_id:
+                            face_result['status'] = 'present'
+                        else:
+                            face_result['status'] = 'other_group'
+                except Exception as e:
+                    logger.error(f"Ошибка обработки face_encoding для face_id {row[0]}: {e}")
+                    continue
             results.append(face_result)
 
         conn.close()
 
-        # Запуск отложенного удаления (60 секунд)
+        # Запуск отложенного удаления для изображения и миниатюр
         all_paths = [image_path] + face_paths
         logger.info(f"Запуск отложенного удаления для путей: {all_paths}")
         threading.Thread(target=delayed_delete, args=(all_paths, 60)).start()
 
         return jsonify({'results': results}), 200
+
     except Exception as e:
         logger.error(f"Ошибка обработки изображения: {e}")
         if os.path.exists(image_path):
@@ -548,11 +595,10 @@ def bulk_mark_attendance():
 # Маршрут для получения логов
 @app.route('/logs', methods=['GET'])
 def get_logs():
-    log_file = "/home/dmitry/PycharmProjects/diploma/face_encoding.log"
+    log_file_path = "/home/dmitry/PycharmProjects/diploma/face_encoding.log"
     try:
         logs = []
-        # Чтение основного файла и резервных файлов (face_encoding.log.1, .2, ..., .5)
-        log_files = [log_file] + [f"{log_file}.{i}" for i in range(1, 6)]
+        log_files = [log_file_path] + [f"{log_file_path}.{i}" for i in range(1, 6)]
         for file in log_files:
             if os.path.exists(file):
                 with open(file, 'r', encoding='utf-8') as f:
