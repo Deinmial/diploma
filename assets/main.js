@@ -390,38 +390,49 @@ function confirmAttendance() {
     }
 
     showLoader('attendance-loader');
+
     fetch(`${API_BASE_URL}/attendance?group_id=${groupId}&subject_id=${subjectId}&date=${date}`)
-    .then(response => response.json())
+    .then(response => {
+        if (!response.ok) throw new Error('Ошибка сети');
+        return response.json();
+    })
     .then(data => {
         if (data.error) {
             alert('Ошибка: ' + data.error);
             return;
         }
+
         const attendanceRecords = data.attendance.map(record => ({
             student_id: record.student_id,
             subject_id: parseInt(subjectId),
-                                                                 attendance_date: date,
-                                                                 status: record.status,
-                                                                 group_id: parseInt(groupId)
+                                                                 group_id: parseInt(groupId),
+                                                                 attendance_date: record.date,
+                                                                 status: record.status
         }));
 
-        fetch(`${API_BASE_URL}/bulk_mark_attendance'`, {
+        // Отправляем JSON
+        return fetch(`${API_BASE_URL}/bulk_mark_attendance`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json'
+            },
             body: JSON.stringify({ records: attendanceRecords })
-        })
-        .then(response => response.json())
-        .then(result => {
-            if (result.status === 'success') {
-                alert('Посещаемость успешно подтверждена');
-                loadAttendance();
-            } else {
-                alert('Ошибка: ' + result.error);
-            }
-        })
-        .catch(error => {
-            alert('Ошибка: ' + error.message);
         });
+    })
+    .then(response => {
+        if (!response.ok) throw new Error('Ошибка сети при подтверждении');
+        return response.json();
+    })
+    .then(result => {
+        if (result.status === 'success') {
+            alert('Посещаемость успешно подтверждена');
+            loadAttendance();
+        } else {
+            alert('Ошибка: ' + result.error);
+        }
+    })
+    .catch(error => {
+        alert('Ошибка: ' + error.message);
     })
     .finally(() => hideLoader('attendance-loader'));
 }
